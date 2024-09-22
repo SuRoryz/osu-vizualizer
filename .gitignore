@@ -1,0 +1,5 @@
+*.osr
+*.osu
+
+__pycache__/
+*.py[cod]
