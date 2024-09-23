@@ -3,64 +3,121 @@ import numpy as np
 from src.utils import osu_to_ndc, calculate_circle_radius
 from src.constants import OSU_PLAYFIELD_WIDTH, OSU_PLAYFIELD_HEIGHT
 
-def draw_circle_object(hit_object, cs, approach_scale):
+def draw_circle_object(hit_object, cs, approach_scale, renderer):
     """
-    Draws a circle hit object with an approach circle.
+    Draws a circle hit object with an approach circle using shaders.
     """
     x = hit_object['x']
     y = hit_object['y']
     radius = calculate_circle_radius(cs)
 
     # Draw approach circle
-    draw_approach_circle(x, y, radius, approach_scale)
+    draw_approach_circle(x, y, radius, approach_scale, renderer)
 
     # Draw hit circle
-    draw_circle(x, y, radius, color=(1, 1, 1))
+    draw_circle(x, y, radius, color=(1, 1, 1, 1), renderer=renderer)
 
-def draw_circle(osu_x, osu_y, radius, color=(1, 1, 1)):
+def draw_circle(osu_x, osu_y, radius, color, renderer):
     """
-    Draws a filled circle at the given osu! coordinates.
+    Draws a filled circle using shaders.
     """
-    ndc_x, ndc_y = osu_to_ndc(osu_x, osu_y)
-    num_segments = 64  # Adjust for circle smoothness
+    num_segments = 64
+    angle_increment = 2 * np.pi / num_segments
+    angles = np.arange(0, 2 * np.pi + angle_increment, angle_increment, dtype=np.float32)
+    vertices = np.zeros((len(angles) + 1, 2), dtype=np.float32)
+    colors = np.tile(color, (len(vertices), 1)).astype(np.float32)
 
-    # Normalize radius for NDC
-    ndc_radius_x = (radius / (OSU_PLAYFIELD_WIDTH / 2))
-    ndc_radius_y = (radius / (OSU_PLAYFIELD_HEIGHT / 2))
+    # Convert osu! coordinates to screen coordinates
+    x, y = osu_to_ndc(osu_x, osu_y)
 
-    glColor3f(*color)
-    glBegin(GL_TRIANGLE_FAN)
-    glVertex2f(ndc_x, ndc_y)  # Center of circle
-    for i in range(num_segments + 1):
-        angle = 2 * np.pi * i / num_segments
-        dx = np.cos(angle) * ndc_radius_x
-        dy = np.sin(angle) * ndc_radius_y
-        glVertex2f(ndc_x + dx, ndc_y + dy)
-    glEnd()
+    # Center vertex
+    vertices[0] = [x, y]
+    # Circle vertices
+    vertices[1:, 0] = x + radius * np.cos(angles)
+    vertices[1:, 1] = y + radius * np.sin(angles)
 
-def draw_approach_circle(osu_x, osu_y, radius, scale):
+    # Create VBOs and draw using renderer's shader program
+    vao = glGenVertexArrays(1)
+    glBindVertexArray(vao)
+
+    vbo_vertices = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+    glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(renderer.position_loc)
+    glVertexAttribPointer(renderer.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+    vbo_colors = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+    glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(renderer.color_loc)
+    glVertexAttribPointer(renderer.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+    # Use renderer's shader program
+    glUseProgram(renderer.shader_program)
+    glUniformMatrix4fv(renderer.mvp_matrix_loc, 1, GL_FALSE, renderer.projection_matrix.T)
+
+    # Draw the circle
+    glDrawArrays(GL_TRIANGLE_FAN, 0, len(vertices))
+
+    # Clean up
+    glDisableVertexAttribArray(renderer.position_loc)
+    glDisableVertexAttribArray(renderer.color_loc)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+    glBindVertexArray(0)
+    glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+    glDeleteVertexArrays(1, [vao])
+
+def draw_approach_circle(osu_x, osu_y, radius, scale, renderer):
     """
-    Draws the approach circle around the hit object.
+    Draws the approach circle around the hit object using shaders.
     """
     scaled_radius = radius * (1 + scale * 3)
-    draw_circle_outline(osu_x, osu_y, scaled_radius, color=(0.0, 0.5, 1.0))
+    draw_circle_outline(osu_x, osu_y, scaled_radius, color=(0.0, 0.5, 1.0, 1.0), renderer=renderer)
 
-def draw_circle_outline(osu_x, osu_y, radius, color=(1, 1, 1)):
+def draw_circle_outline(osu_x, osu_y, radius, color, renderer):
     """
-    Draws an outlined circle at the given osu! coordinates.
+    Draws an outlined circle using shaders.
     """
-    ndc_x, ndc_y = osu_to_ndc(osu_x, osu_y)
-    num_segments = 64  # Adjust for circle smoothness
+    num_segments = 64
+    angle_increment = 2 * np.pi / num_segments
+    angles = np.arange(0, 2 * np.pi, angle_increment, dtype=np.float32)
+    vertices = np.zeros((len(angles), 2), dtype=np.float32)
+    colors = np.tile(color, (len(vertices), 1)).astype(np.float32)
 
-    # Normalize radius for NDC
-    ndc_radius_x = (radius / (OSU_PLAYFIELD_WIDTH / 2))
-    ndc_radius_y = (radius / (OSU_PLAYFIELD_HEIGHT / 2))
+    # Convert osu! coordinates to screen coordinates
+    x, y = osu_to_ndc(osu_x, osu_y)
 
-    glColor3f(*color)
-    glBegin(GL_LINE_LOOP)
-    for i in range(num_segments):
-        angle = 2 * np.pi * i / num_segments
-        dx = np.cos(angle) * ndc_radius_x
-        dy = np.sin(angle) * ndc_radius_y
-        glVertex2f(ndc_x + dx, ndc_y + dy)
-    glEnd()
+    # Circle vertices
+    vertices[:, 0] = x + radius * np.cos(angles)
+    vertices[:, 1] = y + radius * np.sin(angles)
+
+    # Create VBOs and draw using renderer's shader program
+    vao = glGenVertexArrays(1)
+    glBindVertexArray(vao)
+
+    vbo_vertices = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+    glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(renderer.position_loc)
+    glVertexAttribPointer(renderer.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+    vbo_colors = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+    glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(renderer.color_loc)
+    glVertexAttribPointer(renderer.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+    # Use renderer's shader program
+    glUseProgram(renderer.shader_program)
+    glUniformMatrix4fv(renderer.mvp_matrix_loc, 1, GL_FALSE, renderer.projection_matrix.T)
+
+    # Draw the circle outline
+    glDrawArrays(GL_LINE_LOOP, 0, len(vertices))
+
+    # Clean up
+    glDisableVertexAttribArray(renderer.position_loc)
+    glDisableVertexAttribArray(renderer.color_loc)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+    glBindVertexArray(0)
+    glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+    glDeleteVertexArrays(1, [vao])

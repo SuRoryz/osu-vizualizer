@@ -5,6 +5,7 @@ from OpenGL.GL import *
 import os
 import time
 
+import numpy as np
 from scipy.interpolate import CubicSpline
 
 from src.renderer import Renderer
@@ -19,12 +20,17 @@ from config import *
 
 def initialize_window(width=1280, height=720, title="OSU! Replay Visualizer"):
     if not glfw.init():
-        raise Exception("glfw can not be initialized!")
+        raise Exception("glfw cannot be initialized!")
+
+    # Set OpenGL version to 3.3
+    glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+    glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 
     window = glfw.create_window(width, height, title, None, None)
     if not window:
         glfw.terminate()
-        raise Exception("glfw window can not be created!")
+        raise Exception("glfw window cannot be created!")
 
     glfw.make_context_current(window)
     glfw.set_window_size_callback(window, window_resize_callback)
@@ -183,14 +189,29 @@ def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_directi
                 time_diff = 1  # Avoid division by zero or negative values
 
             # Calculate number of points based on desired interval
-            desired_point_interval = 10  # Time in milliseconds between points
+            desired_point_interval = 5  # Time in milliseconds between points
             num_points = max(int(time_diff / desired_point_interval), 1)
 
+            if previous_end_position:
+                # Previous angle
+                previous_angle = np.arctan2(previous_y - start_y, previous_x - start_x)
+                # Angle between start and end point
+                angle = np.arctan2(y - start_y, x - start_x)
+
+                # Angle difference
+                angle_diff = np.abs(previous_angle - angle)
+                
+            else:
+                angle_diff = 0
+            
+            print(angle_diff)
+
             # Alternate curve direction if the option is enabled
-            if alternate_curve_direction:
+            if alternate_curve_direction or time_diff < 100 or angle_diff > np.pi:
                 curve_direction *= -1
             else:
                 curve_direction = 1  # Always curve in the same direction
+        
 
             for t in range(1, num_points + 1):
                 t_normalized = t / num_points
@@ -207,17 +228,26 @@ def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_directi
                 else:
                     dx, dy = 0, 0
 
-                offset = dancing_degree * 100 * curve_direction  # Adjust magnitude and direction
-                control_x = (start_x + x) / 2 + dx * offset
-                control_y = (start_y + y) / 2 + dy * offset
+                offset = dancing_degree * length * curve_direction  # Adjust magnitude and direction
+                # Define two control points for the cubic Bézier curve
+                # Control Point 1: Positioned at 1/3 along the line from start to end, offset perpendicular
+                control1_x = start_x + (x - start_x) / 3 + dx * offset
+                control1_y = start_y + (y - start_y) / 3 + dy * offset
 
-                # Quadratic Bezier curve
-                bezier_x = (1 - t_normalized) ** 2 * start_x + \
-                           2 * (1 - t_normalized) * t_normalized * control_x + \
-                           t_normalized ** 2 * x
-                bezier_y = (1 - t_normalized) ** 2 * start_y + \
-                           2 * (1 - t_normalized) * t_normalized * control_y + \
-                           t_normalized ** 2 * y
+                # Control Point 2: Positioned at 2/3 along the line from start to end, offset perpendicular
+                control2_x = start_x + 2 * (x - start_x) / 3 + dx * offset
+                control2_y = start_y + 2 * (y - start_y) / 3 + dy * offset
+
+                # Compute the cubic Bézier curve points
+                bezier_x = ((1 - t_normalized) ** 3 * start_x +
+                            3 * (1 - t_normalized) ** 2 * t_normalized * control1_x +
+                            3 * (1 - t_normalized) * t_normalized ** 2 * control2_x +
+                            t_normalized ** 3 * x)
+
+                bezier_y = ((1 - t_normalized) ** 3 * start_y +
+                            3 * (1 - t_normalized) ** 2 * t_normalized * control1_y +
+                            3 * (1 - t_normalized) * t_normalized ** 2 * control2_y +
+                            t_normalized ** 3 * y)
 
                 cursor_data.append({
                     'time': interp_time,
@@ -505,12 +535,14 @@ def main():
             # Cursor is not active during this time
             pass
 
-        # Render effects
-        renderer.render_effects()
+        # In the main render loop
+        if 'effects' in renderer.render_functions:
+            renderer.render_functions['effects'].render_effects(renderer)
 
         # Swap front and back buffers
         glfw.swap_buffers(window)
 
+    renderer.cleanup()
     # Terminate glfw when done
     glfw.terminate()
 

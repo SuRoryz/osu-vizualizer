@@ -1,12 +1,11 @@
 from .constants import OSU_PLAYFIELD_WIDTH, OSU_PLAYFIELD_HEIGHT
 
+# Deprecated since conversion in made in projection matrix
 def osu_to_ndc(osu_x, osu_y):
     """
-    Converts osu! coordinates to Normalized Device Coordinates (NDC).
+    Converts osu! coordinates to screen coordinates (normalized to -1 to 1).
     """
-    ndc_x = (osu_x / OSU_PLAYFIELD_WIDTH) * 2 - 1
-    ndc_y = -((osu_y / OSU_PLAYFIELD_HEIGHT) * 2 - 1)
-    return ndc_x, ndc_y
+    return osu_x, osu_y
 
 def calculate_circle_radius(cs):
     """

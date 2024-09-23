@@ -1,5 +1,7 @@
 import os
 import importlib.util
+
+import numpy as np
 from .utils import osu_to_ndc, calculate_circle_radius
 
 from OpenGL.GL import *
@@ -11,6 +13,8 @@ class Renderer:
         self.skin_name = skin_name
         self.skin_path = os.path.join('skins', self.skin_name)
         self.load_skin_functions()
+        self.initialize_shaders()
+        self.initialize_background()
         self.initialize_effects()
 
     def load_skin_functions(self):
@@ -31,6 +35,37 @@ class Renderer:
             else:
                 print(f"Warning: {module_name}.py not found in skin '{self.skin_name} ({module_path})'. Using default rendering for {element}.")
                 self.render_functions[element] = None  # Use default rendering
+    
+    def initialize_shaders(self):
+        """
+        Compiles and links shaders, and sets up any necessary OpenGL state.
+        """
+        # Compile shaders
+        vertex_shader_source = open(os.path.join('src', 'shaders', 'vertex_shader.glsl')).read()
+        fragment_shader_source = open(os.path.join('src', 'shaders', 'fragment_shader.glsl')).read()
+        self.shader_program = self.create_shader_program(vertex_shader_source, fragment_shader_source)
+
+        # Get attribute and uniform locations
+        self.position_loc = glGetAttribLocation(self.shader_program, 'a_position')
+        self.color_loc = glGetAttribLocation(self.shader_program, 'a_color')
+        self.mvp_matrix_loc = glGetUniformLocation(self.shader_program, 'u_mvp_matrix')
+
+        # Set up projection matrix (orthographic)
+        left = 0
+        right = OSU_PLAYFIELD_WIDTH
+        bottom = OSU_PLAYFIELD_HEIGHT
+        top = 0
+
+        self.projection_matrix = np.array([
+            [2.0 / (right - left), 0, 0, -(right + left) / (right - left)],
+            [0, 2.0 / (top - bottom), 0, -(top + bottom) / (top - bottom)],
+            [0, 0, -1, 0],
+            [0, 0, 0, 1]
+        ], dtype=np.float32)
+
+        # Enable blending
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
     def initialize_effects(self):
         """
@@ -47,13 +82,90 @@ class Renderer:
         else:
             print(f"Warning: effects.py not found in skin '{self.skin_name}'. Effects will not be available.")
             self.effects_module = None
+    
+    def initialize_background(self):
+        """
+        Sets up buffer objects for the background.
+        """
+        vertices = np.array([
+            [-1.0, -1.0],  # Bottom-left
+            [1.0, -1.0],   # Bottom-right
+            [-1.0, 1.0],   # Top-left
+            [1.0, 1.0]     # Top-right
+        ], dtype=np.float32)
+
+        colors = np.array([
+            [0.1, 0.1, 0.1, 1.0],
+            [0.1, 0.1, 0.1, 1.0],
+            [0.1, 0.1, 0.1, 1.0],
+            [0.1, 0.1, 0.1, 1.0]
+        ], dtype=np.float32)
+
+        self.background_vao = glGenVertexArrays(1)
+        glBindVertexArray(self.background_vao)
+
+        vbo_vertices = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.position_loc)
+        glVertexAttribPointer(self.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+        vbo_colors = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+        glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.color_loc)
+        glVertexAttribPointer(self.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+        # Unbind VAO and VBO
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+
+        # Store VBOs for cleanup
+        self.background_vbos = [vbo_vertices, vbo_colors]
+
+    def create_shader_program(self, vertex_source, fragment_source):
+        """
+        Compiles vertex and fragment shaders and links them into a program.
+        """
+        vertex_shader = glCreateShader(GL_VERTEX_SHADER)
+        glShaderSource(vertex_shader, vertex_source)
+        glCompileShader(vertex_shader)
+        if not glGetShaderiv(vertex_shader, GL_COMPILE_STATUS):
+            error = glGetShaderInfoLog(vertex_shader).decode()
+            print(f"Vertex shader compilation error: {error}")
+            glDeleteShader(vertex_shader)
+            return None
+
+        fragment_shader = glCreateShader(GL_FRAGMENT_SHADER)
+        glShaderSource(fragment_shader, fragment_source)
+        glCompileShader(fragment_shader)
+        if not glGetShaderiv(fragment_shader, GL_COMPILE_STATUS):
+            error = glGetShaderInfoLog(fragment_shader).decode()
+            print(f"Fragment shader compilation error: {error}")
+            glDeleteShader(fragment_shader)
+            return None
+
+        shader_program = glCreateProgram()
+        glAttachShader(shader_program, vertex_shader)
+        glAttachShader(shader_program, fragment_shader)
+        glLinkProgram(shader_program)
+        if not glGetProgramiv(shader_program, GL_LINK_STATUS):
+            error = glGetProgramInfoLog(shader_program).decode()
+            print(f"Shader program linking error: {error}")
+            glDeleteProgram(shader_program)
+            return None
+
+        glDeleteShader(vertex_shader)
+        glDeleteShader(fragment_shader)
+
+        return shader_program
 
     def draw_circle_object(self, hit_object, cs, approach_scale):
         """
         Delegates circle object rendering to the skin's function.
         """
         if self.render_functions.get('circle') and hasattr(self.render_functions['circle'], 'draw_circle_object'):
-            self.render_functions['circle'].draw_circle_object(hit_object, cs, approach_scale)
+            self.render_functions['circle'].draw_circle_object(hit_object, cs, approach_scale, renderer=self)
         else:
             self.default_draw_circle_object(hit_object, cs, approach_scale)
 
@@ -62,7 +174,7 @@ class Renderer:
         Delegates slider object rendering to the skin's function.
         """
         if self.render_functions.get('slider') and hasattr(self.render_functions['slider'], 'draw_slider_object'):
-            self.render_functions['slider'].draw_slider_object(hit_object, cs, approach_scale)
+            self.render_functions['slider'].draw_slider_object(hit_object, cs, approach_scale, renderer=self)
         else:
             self.default_draw_slider_object(hit_object, cs, approach_scale)
 
@@ -71,7 +183,7 @@ class Renderer:
         Delegates spinner object rendering to the skin's function.
         """
         if self.render_functions.get('spinner') and hasattr(self.render_functions['spinner'], 'draw_spinner_object'):
-            self.render_functions['spinner'].draw_spinner_object(hit_object, current_time)
+            self.render_functions['spinner'].draw_spinner_object(hit_object, current_time, renderer=self)
         else:
             self.default_draw_spinner_object(hit_object, current_time)
 
@@ -80,7 +192,7 @@ class Renderer:
         Delegates cursor rendering to the skin's function.
         """
         if self.render_functions.get('cursor') and hasattr(self.render_functions['cursor'], 'draw_cursor'):
-            self.render_functions['cursor'].draw_cursor(cursor_pos, cursor_color)
+            self.render_functions['cursor'].draw_cursor(cursor_pos, cursor_color, renderer=self)
         else:
             self.default_draw_cursor(cursor_pos, cursor_color)
 
@@ -89,7 +201,7 @@ class Renderer:
         Delegates cursor trail rendering to the skin's function.
         """
         if self.render_functions.get('cursor_trail') and hasattr(self.render_functions['cursor_trail'], 'draw_cursor_trail'):
-            self.render_functions['cursor_trail'].draw_cursor_trail(trail_points)
+            self.render_functions['cursor_trail'].draw_cursor_trail(trail_points, renderer=self)
         else:
             self.default_draw_cursor_trail(trail_points)
 
@@ -98,7 +210,7 @@ class Renderer:
         Delegates background rendering to the skin's function.
         """
         if self.render_functions.get('background') and hasattr(self.render_functions['background'], 'draw_background'):
-            self.render_functions['background'].draw_background()
+            self.render_functions['background'].draw_background(renderer=self)
         else:
             self.default_draw_background()
 
@@ -168,60 +280,113 @@ class Renderer:
 
     def default_draw_cursor_trail(self, trail_points):
         """
-        Default rendering for the cursor trail.
+        Default rendering for the cursor trail using shaders.
         """
         num_points = min(len(trail_points), CURSOR_TRAIL_LENGTH)
         if num_points < 2:
             return
 
-        glBegin(GL_LINE_STRIP)
-        for i in range(-num_points, 0):
-            point = trail_points[i]
-            ndc_x, ndc_y = osu_to_ndc(point['x'], point['y'])
+        # Prepare vertex and color data
+        vertices = np.array([osu_to_ndc(p['x'], p['y']) for p in trail_points[-num_points:]], dtype=np.float32)
 
-            if CURSOR_TRAIL_FADE:
-                alpha = (i + num_points) / num_points
-            else:
-                alpha = 1.0
-            glColor4f(1.0, 0.0, 0.0, alpha * 0.5)
-            glVertex2f(ndc_x, ndc_y)
-        glEnd()
+        if CURSOR_TRAIL_FADE:
+            alphas = np.linspace(0.5, 0.0, num_points)
+        else:
+            alphas = np.full(num_points, 0.5)
+
+        colors = np.zeros((num_points, 4), dtype=np.float32)
+        colors[:, 0] = 1.0  # Red color
+        colors[:, 3] = alphas  # Alpha values
+
+        # Create VBOs
+        vao = glGenVertexArrays(1)
+        glBindVertexArray(vao)
+
+        vbo_vertices = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_DYNAMIC_DRAW)
+        glEnableVertexAttribArray(self.position_loc)
+        glVertexAttribPointer(self.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+        vbo_colors = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+        glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_DYNAMIC_DRAW)
+        glEnableVertexAttribArray(self.color_loc)
+        glVertexAttribPointer(self.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+        # Use shader program
+        glUseProgram(self.shader_program)
+        glUniformMatrix4fv(self.mvp_matrix_loc, 1, GL_FALSE, self.projection_matrix.T)
+
+        # Draw the cursor trail
+        glDrawArrays(GL_LINE_STRIP, 0, num_points)
+
+        # Clean up
+        glDisableVertexAttribArray(self.position_loc)
+        glDisableVertexAttribArray(self.color_loc)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+        glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+        glDeleteVertexArrays(1, [vao])
 
     def default_draw_background(self):
         """
-        Default rendering for the background.
+        Draws the background using pre-initialized VBOs.
         """
-        glColor3f(0.1, 0.1, 0.1)
-        glBegin(GL_QUADS)
-        glVertex2f(-1, -1)
-        glVertex2f(1, -1)
-        glVertex2f(1, 1)
-        glVertex2f(-1, 1)
-        glEnd()
+        glBindVertexArray(self.background_vao)
+        glUseProgram(self.shader_program)
+        glUniformMatrix4fv(self.mvp_matrix_loc, 1, GL_FALSE, self.projection_matrix.T)
 
-    def default_draw_circle(self, osu_x, osu_y, radius, color=(1, 1, 1)):
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+
+        glBindVertexArray(0)
+
+    def default_draw_circle(self, osu_x, osu_y, radius, color=(1, 1, 1, 1)):
         """
-        Draws a filled circle at the given osu! coordinates.
+        Draws a filled circle at the given osu! coordinates using shaders.
         """
-        from OpenGL.GL import glBegin, glEnd, glVertex2f, GL_TRIANGLE_FAN, glColor3f
-        import numpy as np
+        num_segments = 64
+        angle_increment = 2 * np.pi / num_segments
+        angles = np.arange(0, 2 * np.pi + angle_increment, angle_increment, dtype=np.float32)
+        vertices = np.zeros((len(angles) + 1, 2), dtype=np.float32)
+        colors = np.tile(color, (len(vertices), 1)).astype(np.float32)
 
-        ndc_x, ndc_y = osu_to_ndc(osu_x, osu_y)
-        num_segments = 64  # Adjust for circle smoothness
+        # Center vertex
+        vertices[0] = [osu_x, osu_y]
+        # Circle vertices
+        vertices[1:, 0] = osu_x + radius * np.cos(angles)
+        vertices[1:, 1] = osu_y + radius * np.sin(angles)
 
-        # Normalize radius for NDC
-        ndc_radius_x = (radius / (OSU_PLAYFIELD_WIDTH / 2))
-        ndc_radius_y = (radius / (OSU_PLAYFIELD_HEIGHT / 2))
+        # Create VBOs
+        vao = glGenVertexArrays(1)
+        glBindVertexArray(vao)
 
-        glColor3f(*color)
-        glBegin(GL_TRIANGLE_FAN)
-        glVertex2f(ndc_x, ndc_y)  # Center of circle
-        for i in range(num_segments + 1):
-            angle = 2 * np.pi * i / num_segments
-            dx = np.cos(angle) * ndc_radius_x
-            dy = np.sin(angle) * ndc_radius_y
-            glVertex2f(ndc_x + dx, ndc_y + dy)
-        glEnd()
+        vbo_vertices = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.position_loc)
+        glVertexAttribPointer(self.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+        vbo_colors = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+        glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.color_loc)
+        glVertexAttribPointer(self.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+        # Use shader program
+        glUseProgram(self.shader_program)
+        glUniformMatrix4fv(self.mvp_matrix_loc, 1, GL_FALSE, self.projection_matrix.T)
+
+        # Draw the circle
+        glDrawArrays(GL_TRIANGLE_FAN, 0, len(vertices))
+
+        # Clean up
+        glDisableVertexAttribArray(self.position_loc)
+        glDisableVertexAttribArray(self.color_loc)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+        glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+        glDeleteVertexArrays(1, [vao])
 
     def default_draw_approach_circle(self, osu_x, osu_y, radius, scale):
         """
@@ -230,45 +395,107 @@ class Renderer:
         scaled_radius = radius * (1 + scale * 3)
         self.default_draw_circle_outline(osu_x, osu_y, scaled_radius, color=(0.0, 0.5, 1.0))
 
-    def default_draw_circle_outline(self, osu_x, osu_y, radius, color=(1, 1, 1)):
+    def default_draw_circle_outline(self, osu_x, osu_y, radius, color=(1, 1, 1, 1)):
         """
-        Draws an outlined circle at the given osu! coordinates.
+        Draws an outlined circle at the given osu! coordinates using shaders.
         """
-        from OpenGL.GL import glBegin, glEnd, glVertex2f, GL_LINE_LOOP, glColor3f
-        import numpy as np
+        num_segments = 64
+        angle_increment = 2 * np.pi / num_segments
+        angles = np.arange(0, 2 * np.pi, angle_increment, dtype=np.float32)
+        vertices = np.zeros((len(angles), 2), dtype=np.float32)
+        colors = np.tile(color, (len(vertices), 1)).astype(np.float32)
 
-        ndc_x, ndc_y = osu_to_ndc(osu_x, osu_y)
-        num_segments = 64  # Adjust for circle smoothness
+        # Convert osu! coordinates to screen coordinates
+        x, y = osu_to_ndc(osu_x, osu_y)
 
-        # Normalize radius for NDC
-        ndc_radius_x = (radius / (OSU_PLAYFIELD_WIDTH / 2))
-        ndc_radius_y = (radius / (OSU_PLAYFIELD_HEIGHT / 2))
+        # Circle vertices
+        vertices[:, 0] = x + radius * np.cos(angles)
+        vertices[:, 1] = y + radius * np.sin(angles)
 
-        glColor3f(*color)
-        glBegin(GL_LINE_LOOP)
-        for i in range(num_segments):
-            angle = 2 * np.pi * i / num_segments
-            dx = np.cos(angle) * ndc_radius_x
-            dy = np.sin(angle) * ndc_radius_y
-            glVertex2f(ndc_x + dx, ndc_y + dy)
-        glEnd()
+        # Create VBOs
+        vao = glGenVertexArrays(1)
+        glBindVertexArray(vao)
+
+        vbo_vertices = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.position_loc)
+        glVertexAttribPointer(self.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+        vbo_colors = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+        glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.color_loc)
+        glVertexAttribPointer(self.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+        # Use shader program
+        glUseProgram(self.shader_program)
+        glUniformMatrix4fv(self.mvp_matrix_loc, 1, GL_FALSE, self.projection_matrix.T)
+
+        # Draw the circle outline
+        glDrawArrays(GL_LINE_LOOP, 0, len(vertices))
+
+        # Clean up
+        glDisableVertexAttribArray(self.position_loc)
+        glDisableVertexAttribArray(self.color_loc)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+        glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+        glDeleteVertexArrays(1, [vao])
 
     def default_draw_slider_path(self, hit_object):
         """
-        Draws a simplified slider path.
+        Draws the slider path using shaders.
         """
-        from OpenGL.GL import glBegin, glEnd, glVertex2f, GL_LINE_STRIP, glColor3f
-
+        # Extract vertices
         start_x, start_y = hit_object['x'], hit_object['y']
         points = hit_object['curve_points']
-        vertices = [(start_x, start_y)] + [(p['x'], p['y']) for p in points]
+        vertices_osu = [(start_x, start_y)] + [(p['x'], p['y']) for p in points]
+        vertices = np.array([osu_to_ndc(x, y) for x, y in vertices_osu], dtype=np.float32)
 
-        glColor3f(1.0, 1.0, 0.0)
-        glBegin(GL_LINE_STRIP)
-        for x, y in vertices:
-            ndc_x, ndc_y = osu_to_ndc(x, y)
-            glVertex2f(ndc_x, ndc_y)
-        glEnd()
+        color = (1.0, 1.0, 0.0, 1.0)  # Yellow color for slider path
+        colors = np.tile(color, (len(vertices), 1)).astype(np.float32)
+
+        # Create VBOs
+        vao = glGenVertexArrays(1)
+        glBindVertexArray(vao)
+
+        vbo_vertices = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.position_loc)
+        glVertexAttribPointer(self.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
+
+        vbo_colors = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+        glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+        glEnableVertexAttribArray(self.color_loc)
+        glVertexAttribPointer(self.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
+
+        # Use shader program
+        glUseProgram(self.shader_program)
+        glUniformMatrix4fv(self.mvp_matrix_loc, 1, GL_FALSE, self.projection_matrix.T)
+
+        # Draw the slider path
+        glDrawArrays(GL_LINE_STRIP, 0, len(vertices))
+
+        # Clean up
+        glDisableVertexAttribArray(self.position_loc)
+        glDisableVertexAttribArray(self.color_loc)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindVertexArray(0)
+        glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+        glDeleteVertexArrays(1, [vao])
+
+    def cleanup(self):
+        """
+        Cleans up OpenGL resources.
+        """
+        if hasattr(self, 'background_vao'):
+            glDeleteVertexArrays(1, [self.background_vao])
+            glDeleteBuffers(2, self.background_vbos)
+        if hasattr(self, 'shader_program'):
+            glDeleteProgram(self.shader_program)
 
     # Event callbacks
     def on_key_press(self, key):

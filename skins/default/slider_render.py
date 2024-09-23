@@ -3,83 +3,65 @@ from src.utils import osu_to_ndc, calculate_circle_radius
 from src.constants import OSU_PLAYFIELD_WIDTH, OSU_PLAYFIELD_HEIGHT
 import numpy as np
 
-def draw_slider_object(hit_object, cs, approach_scale):
+from skins.default.circle_render import draw_circle, draw_approach_circle
+
+def draw_slider_object(hit_object, cs, approach_scale, renderer):
     """
-    Draws a slider hit object with an approach circle.
+    Draws a slider hit object with an approach circle using shaders.
     """
     x = hit_object['x']
     y = hit_object['y']
     radius = calculate_circle_radius(cs)
 
     # Draw approach circle
-    draw_approach_circle(x, y, radius, approach_scale)
+    draw_approach_circle(x, y, radius, approach_scale, renderer)
 
     # Draw slider path
-    draw_slider_path(hit_object)
+    draw_slider_path(hit_object, renderer)
 
     # Draw hit circle at slider start
-    draw_circle(x, y, radius, color=(0.5, 1.0, 0.5))
+    draw_circle(x, y, radius, color=(0.5, 1.0, 0.5, 1.0), renderer=renderer)
 
-def draw_slider_path(hit_object):
+def draw_slider_path(hit_object, renderer):
     """
-    Draws the slider path.
+    Draws the slider path using shaders.
     """
+    # Extract vertices
     start_x, start_y = hit_object['x'], hit_object['y']
     points = hit_object['curve_points']
-    vertices = [(start_x, start_y)] + [(p['x'], p['y']) for p in points]
+    vertices_osu = [(start_x, start_y)] + [(p['x'], p['y']) for p in points]
+    vertices = np.array([osu_to_ndc(x, y) for x, y in vertices_osu], dtype=np.float32)
 
-    ndc_vertices = [osu_to_ndc(x, y) for x, y in vertices]
+    color = (1.0, 1.0, 0.0, 1.0)  # Yellow color for slider path
+    colors = np.tile(color, (len(vertices), 1)).astype(np.float32)
 
-    glColor3f(1.0, 1.0, 0.0)
-    glBegin(GL_LINE_STRIP)
-    for ndc_x, ndc_y in ndc_vertices:
-        glVertex2f(ndc_x, ndc_y)
-    glEnd()
+    # Create VBOs and draw using renderer's shader program
+    vao = glGenVertexArrays(1)
+    glBindVertexArray(vao)
 
-def draw_circle(osu_x, osu_y, radius, color=(1, 1, 1)):
-    """
-    Draws a filled circle at the given osu! coordinates.
-    """
-    ndc_x, ndc_y = osu_to_ndc(osu_x, osu_y)
-    num_segments = 64  # Adjust for circle smoothness
+    vbo_vertices = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+    glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(renderer.position_loc)
+    glVertexAttribPointer(renderer.position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
 
-    # Normalize radius for NDC
-    ndc_radius_x = (radius / (OSU_PLAYFIELD_WIDTH / 2))
-    ndc_radius_y = (radius / (OSU_PLAYFIELD_HEIGHT / 2))
+    vbo_colors = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+    glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+    glEnableVertexAttribArray(renderer.color_loc)
+    glVertexAttribPointer(renderer.color_loc, 4, GL_FLOAT, GL_FALSE, 0, None)
 
-    glColor3f(*color)
-    glBegin(GL_TRIANGLE_FAN)
-    glVertex2f(ndc_x, ndc_y)  # Center of circle
-    for i in range(num_segments + 1):
-        angle = 2 * np.pi * i / num_segments
-        dx = np.cos(angle) * ndc_radius_x
-        dy = np.sin(angle) * ndc_radius_y
-        glVertex2f(ndc_x + dx, ndc_y + dy)
-    glEnd()
+    # Use renderer's shader program
+    glUseProgram(renderer.shader_program)
+    glUniformMatrix4fv(renderer.mvp_matrix_loc, 1, GL_FALSE, renderer.projection_matrix.T)
 
-def draw_approach_circle(osu_x, osu_y, radius, scale):
-    """
-    Draws the approach circle around the hit object.
-    """
-    scaled_radius = radius * (1 + scale * 3)
-    draw_circle_outline(osu_x, osu_y, scaled_radius, color=(0.0, 0.5, 1.0))
+    # Draw the slider path
+    glDrawArrays(GL_LINE_STRIP, 0, len(vertices))
 
-def draw_circle_outline(osu_x, osu_y, radius, color=(1, 1, 1)):
-    """
-    Draws an outlined circle at the given osu! coordinates.
-    """
-    ndc_x, ndc_y = osu_to_ndc(osu_x, osu_y)
-    num_segments = 64  # Adjust for circle smoothness
-
-    # Normalize radius for NDC
-    ndc_radius_x = (radius / (OSU_PLAYFIELD_WIDTH / 2))
-    ndc_radius_y = (radius / (OSU_PLAYFIELD_HEIGHT / 2))
-
-    glColor3f(*color)
-    glBegin(GL_LINE_LOOP)
-    for i in range(num_segments):
-        angle = 2 * np.pi * i / num_segments
-        dx = np.cos(angle) * ndc_radius_x
-        dy = np.sin(angle) * ndc_radius_y
-        glVertex2f(ndc_x + dx, ndc_y + dy)
-    glEnd()
+    # Clean up
+    glDisableVertexAttribArray(renderer.position_loc)
+    glDisableVertexAttribArray(renderer.color_loc)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+    glBindVertexArray(0)
+    glDeleteBuffers(2, [vbo_vertices, vbo_colors])
+    glDeleteVertexArrays(1, [vao])
