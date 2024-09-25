@@ -122,6 +122,7 @@ class Beatmap:
             obj['curve_points'] = self.parse_curve_points(values[5])
             obj['slides'] = int(values[6])
             obj['length'] = float(values[7])
+            obj['slider_duration'] = self.calculate_slider_duration(obj)
             # Additional slider parameters can be parsed here
         elif obj_type & 8:
             obj['object_name'] = 'spinner'
@@ -150,3 +151,68 @@ class Beatmap:
             # If AR is not specified, it's the same as OD (older beatmaps)
             ar = self.difficulty.get('OverallDifficulty', 5)
         return float(ar)
+    
+    def get_overall_difficulty(self):
+        od = self.difficulty.get('OverallDifficulty', 5)
+        return float(od)
+    
+    def calculate_slider_duration(self, slider_obj):
+        """
+        Calculates the slider duration in milliseconds for a given slider object.
+        """
+        slider_length = slider_obj['length']
+        slider_repeats = slider_obj['slides']
+
+        # Get the slider multiplier from the [Difficulty] section
+        slider_multiplier = float(self.difficulty.get('SliderMultiplier', 1.0))
+
+        # Get the beat length and slider velocity at the time of the slider
+        beat_length, slider_velocity = self.get_timing_at(slider_obj['time'])
+
+        # Calculate the duration of one beat (in milliseconds)
+        beat_duration = beat_length  # Uninherited beat_length is already in milliseconds
+
+        # Calculate pixel length per beat
+        pixel_length_per_beat = slider_multiplier * slider_velocity * 100
+
+        # Calculate the duration of the slider
+        duration_per_repeat = (slider_length * beat_duration) / pixel_length_per_beat
+
+        # Total slider duration
+        slider_duration = duration_per_repeat * slider_repeats
+
+        return slider_duration
+    
+    def get_timing_at(self, time):
+        """
+        Gets the beat length and slider velocity at a given time.
+        """
+        # Initialize default values
+        beat_length = 500  # Default beat length (120 BPM)
+        slider_velocity = 1.0  # Default SV multiplier
+
+        # Variables to keep track of the latest uninherited and inherited timing points
+        last_uninherited = None
+        last_inherited = None
+
+        for timing_point in self.timing_points:
+            if timing_point['time'] <= time:
+                if timing_point['uninherited']:
+                    last_uninherited = timing_point
+                else:
+                    last_inherited = timing_point
+            else:
+                break
+
+        if last_uninherited:
+            beat_length = last_uninherited['beat_length']
+
+        if last_inherited:
+            # Slider velocity is calculated from the inherited beat length
+            sv_multiplier = -100 / last_inherited['beat_length']  # Negative sign to handle negative beat_length
+            slider_velocity = sv_multiplier
+        else:
+            # If no inherited timing point, use default SV multiplier (1.0)
+            slider_velocity = 1.0
+
+        return beat_length, slider_velocity
