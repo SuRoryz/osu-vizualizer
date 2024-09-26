@@ -1,23 +1,30 @@
 #version 330 core
 
-uniform float u_time;
+// Shadertoy Uniforms
+uniform vec3 iResolution;    // viewport resolution (in pixels)
+uniform float iTime;         // shader playback time (in seconds)
+uniform float iLastPressTime;
 
 in vec2 v_tex_coord;
 out vec4 frag_color;
 
-// Helper function to convert HSV to RGB
-vec3 hsv2rgb(vec3 c)
+void mainImage( out vec4 O, vec2 u )
 {
-    vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
-    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    vec2 R =  iResolution.xy,
+         U = ( u+u - R ) / R.y, P;  
+    U.x += sin(U.y + iTime) * .1;
+    O*=0.;
+    for (float i,l; i < 19.; i++ )
+        l = length( P = 13.* ( U + i/20.* cos(i+iTime +vec2(0,11)) ) *  mat2(cos( i+i + vec4(0,33,11,0)))),
+        R = P*P,
+        O +=   (1. - l       ) / abs(P.x * P.y) / 1e3 
+             + (1. - l * 1.86) / abs(R.x - R.y) / 1e2  
+             + .1 / (l - .01);    
 }
 
 void main()
 {
-    // Cool shader effect (e.g., moving gradient)
-    float hue = mod(v_tex_coord.x + v_tex_coord.y + u_time * 0.0001, 1.0);
-    vec3 color = hsv2rgb(vec3(hue, 0.5, 0.5));
-
-    frag_color = vec4(color, 0.1); // 0.2 opacity
+    vec4 color;
+    mainImage(color, gl_FragCoord.xy);
+    frag_color = color * 1;
 }

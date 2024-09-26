@@ -11,9 +11,11 @@ from src.utils import load_texture
 from glfw.GLFW import *
 
 class Renderer:
-    def __init__(self, window_width, window_height, skin_name="default"):
+    def __init__(self, window, window_width, window_height, skin_name="default"):
         self.skin_name = skin_name
         self.skin_path = os.path.join('skins', self.skin_name)
+
+        self.window = window 
         self.window_width = window_width
         self.window_height = window_height
 
@@ -138,12 +140,12 @@ class Renderer:
         else:
             print("Warning: draw_cursor_trail() not implemented in skin.")
 
-    def draw_background(self, current_time):
+    def draw_background(self, current_time, last_press_time):
         """
         Delegates background rendering to the skin's function.
         """
         if 'background' in self.render_functions and hasattr(self.render_functions['background'], 'draw_background'):
-            self.render_functions['background'].draw_background(self, current_time)
+            self.render_functions['background'].draw_background(self, current_time, last_press_time)
         else:
             print("Warning: draw_background() not implemented in skin.")
 

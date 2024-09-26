@@ -2,8 +2,6 @@
 
 uniform float u_time;
 
-in float v_width;
-
 out vec4 frag_color;
 
 // Helper function to convert HSV to RGB
@@ -16,15 +14,10 @@ vec3 hsv2rgb(vec3 c)
 
 void main()
 {
-    // Calculate position along the trail
-    float t = gl_FragCoord.y / v_width;
 
     // Rainbow gradient from start to end
-    float hue = mod(t + u_time * 0.2, 1.0);
+    float hue = mod(u_time * 0.0001 + 0.5, 1.0);
     vec3 color = hsv2rgb(vec3(hue, 1.0, 1.0));
 
-    // White glow
-    float glow = smoothstep(1.0, 0.9, t);
-
-    frag_color = vec4(color, glow);
+    frag_color = vec4(color, 1.0);
 }

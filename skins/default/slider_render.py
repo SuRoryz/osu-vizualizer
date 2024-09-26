@@ -17,6 +17,9 @@ circle_uniform_locations = {}
 slider_path_cache = {}
 slider_sampled_path_cache = {}
 
+path_vertecies_cache = {}
+path_outline_vertecies_cache = {}
+
 def init(renderer):
     """
     Initializes the slider rendering module by loading and compiling shaders.
@@ -175,10 +178,18 @@ def draw_slider_path(hit_object, radius, renderer, current_time):
     hit_object['sampled_path'] = sampled_path
 
     # Generate vertices for the main path
-    main_vertices = generate_path_vertices(sampled_path, width=radius-5)
+    if cache_key in path_vertecies_cache:
+        main_vertices = path_vertecies_cache[cache_key]
+    else:
+        main_vertices = generate_path_vertices(sampled_path, width=radius-5)
+        path_vertecies_cache[cache_key] = main_vertices
 
     # Generate vertices for the outline path
-    outline_vertices = generate_path_vertices(sampled_path, width=radius)
+    if cache_key in path_outline_vertecies_cache:
+        outline_vertices = path_outline_vertecies_cache[cache_key]
+    else:
+        outline_vertices = generate_path_vertices(sampled_path, width=radius)
+        path_outline_vertecies_cache[cache_key] = outline_vertices
 
     # Create and bind VAO and VBO for main path
     vao_main, vbo_main = create_vao_vbo(main_vertices)

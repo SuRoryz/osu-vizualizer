@@ -152,6 +152,15 @@ def generate_auto_play_cursor_data(beatmap):
             })
     return cursor_data
 
+def compute_angle(x1, y1, x2, y2):
+    """
+    Computes the absolute angle in degrees between two vectors (x1, y1) and (x2, y2).
+    """
+    dot = x1 * x2 + y1 * y2
+    det = x1 * y2 - y1 * x2
+    angle = math.atan2(det, dot) * 180 / math.pi
+    return abs(angle)
+
 def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_direction):
     """
     Generates cursor data for the Dancer playstyle with smooth curves between hit objects.
@@ -200,14 +209,25 @@ def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_directi
             time_diff = 1  # Avoid division by zero or negative values
 
         # Calculate number of points based on desired interval
-        desired_point_interval = 5  # Time in milliseconds between points
+        desired_point_interval = 2  # Time in milliseconds between points
         num_points = max(int(time_diff / desired_point_interval), 1)
 
-        # Alternate curve direction if the option is enabled
-        if alternate_curve_direction:
-            curve_direction *= -1
-        else:
-            curve_direction = 1  # Always curve in the same direction
+        # Calculate angle difference for curve direction alternation
+        if alternate_curve_direction and previous_obj and i < len(beatmap.hit_objects) - 1:
+            next_obj = beatmap.hit_objects[i + 1]
+            # Vector from previous to current
+            vec1_x = x - start_x
+            vec1_y = y - start_y
+            # Vector from current to next
+            vec2_x = next_obj['x'] - x
+            vec2_y = next_obj['y'] - y
+            angle_diff = compute_angle(vec1_x, vec1_y, vec2_x, vec2_y)
+            if angle_diff < 30:
+                curve_direction *= -1  # Alternate direction
+            # If angle_diff >= threshold, keep the current direction
+        elif alternate_curve_direction:
+            # If not enough objects to compare, keep current direction
+            curve_direction = 1
 
         for t in range(num_points):
             t_normalized = t / num_points
@@ -385,7 +405,7 @@ def main():
     window = initialize_window()
 
     # Initialize resources
-    resources = load_resources()
+    resources = load_resources(window)
 
     # Start audio playback
     start_time = start_audio_playback(resources['audio_file_path'])
@@ -410,7 +430,7 @@ def main():
     # Cleanup and terminate
     cleanup(window, game_state['renderer'])
 
-def load_resources():
+def load_resources(window):
     resources = {}
     # Load the beatmap
     beatmap_path = input("Enter the path to the beatmap (.osu) file: ")
@@ -479,7 +499,7 @@ def load_resources():
 
     # Initialize the renderer
     window_width, window_height = glfw.get_framebuffer_size(glfw.get_current_context())
-    renderer = Renderer(window_width, window_height)
+    renderer = Renderer(window, window_width, window_height)
 
     resources['beatmap'] = beatmap
     resources['replay_data'] = replay_data
@@ -676,7 +696,7 @@ def process_circle(game_state, obj, time_diff, cursor_pos,
         success_hit(50, score)
     else:
         miss(score)
-        miss_sound.play()
+        #miss_sound.play()
 
     hitsound.play()
     game_state["renderer"].on_object_hit(obj, 300, current_time)
@@ -706,7 +726,8 @@ def process_slider_start(game_state, obj, time_diff, cursor_pos, cs, new_key_pre
 
     if distance > radius:
         miss(score)
-        miss_sound.play()
+        hitsound.play()
+        #miss_sound.play()
         hitted_objects[obj['time']] = True
         return
 
@@ -727,7 +748,8 @@ def process_slider_start(game_state, obj, time_diff, cursor_pos, cs, new_key_pre
         hitted_objects[obj['time']] = True
     else:
         miss(score)
-        miss_sound.play()
+        hitsound.play()
+        #miss_sound.play()
         hitted_objects[obj['time']] = True
 
 def process_active_sliders(game_state):
@@ -793,8 +815,14 @@ def render_frame(window, game_state):
     preempt = game_state['preempt']
     cs = game_state['cs']
 
+    current_key = cursor_pos['keys']
+    new_key_pressed = current_key & (~game_state['previous_key'])
+
+    if new_key_pressed:
+        game_state['last_press_time'] = current_time
+
     # Draw background
-    renderer.draw_background(current_time)
+    renderer.draw_background(current_time, game_state.get('last_press_time', -100000))
 
     # Draw hit objects
     visible_hit_objects = [

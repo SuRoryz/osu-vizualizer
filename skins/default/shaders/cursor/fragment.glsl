@@ -15,7 +15,7 @@ vec3 hsv2rgb(vec3 c)
 }
 
 void main()
-{
+{   
     // Calculate distance from center
     float dist = length(v_position);
 
@@ -24,7 +24,7 @@ void main()
         discard;
 
     // Calculate hue changing over time
-    float hue = mod(u_time * 0.0001, 1.0);
+    float hue = mod(u_time * 0.0001 + 0.5, 1.0);
 
     // Convert HSV to RGB
     vec3 color = hsv2rgb(vec3(hue, 1.0, 1.0));

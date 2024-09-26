@@ -1,5 +1,6 @@
 import os
 from OpenGL.GL import *
+import glfw
 import numpy as np
 
 # Module-level variables
@@ -25,7 +26,9 @@ def init(renderer):
     shader_program = create_shader_program(vertex_shader_source, fragment_shader_source)
 
     # Get uniform locations
-    uniform_locations['u_time'] = glGetUniformLocation(shader_program, 'u_time')
+    uniform_locations['iResolution'] = glGetUniformLocation(shader_program, 'iResolution')
+    uniform_locations['iTime'] = glGetUniformLocation(shader_program, 'iTime')
+    uniform_locations['iLastPressTime'] = glGetUniformLocation(shader_program, 'iLastPressTime')
 
 def create_shader_program(vertex_source, fragment_source):
     """
@@ -64,7 +67,7 @@ def create_shader_program(vertex_source, fragment_source):
 
     return program
 
-def draw_background(renderer, current_time):
+def draw_background(renderer, current_time, last_press_time):
     """
     Draws the background with a cool shader effect.
     """
@@ -93,7 +96,11 @@ def draw_background(renderer, current_time):
     glUseProgram(shader_program)
 
     # Set uniforms
-    glUniform1f(uniform_locations['u_time'], current_time)
+    glUniform1f(uniform_locations['iTime'], current_time / 1000)
+    glUniform1f(uniform_locations['iLastPressTime'], last_press_time / 1000)
+
+    viewport = glfw.get_window_size(renderer.window)
+    glUniform3f(uniform_locations['iResolution'], float(viewport[0]), float(viewport[1]), 0.0)
 
     # Draw the background
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
