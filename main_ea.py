@@ -20,7 +20,7 @@ from config import *
 
 import pygame
 
-def initialize_window(width=1920, height=1080, title="OSU! Replay Visualizer", renderer=None):
+def initialize_window(width=1280, height=720, title="OSU! Replay Visualizer"):
     if not glfw.init():
         raise Exception("glfw cannot be initialized!")
 
@@ -61,6 +61,7 @@ def window_resize_callback(window, width, height):
         viewport_height = int(width / playfield_ratio)
         viewport_x = 0
         viewport_y = int((height - viewport_height) / 2)
+
     glViewport(viewport_x, viewport_y, viewport_width, viewport_height)
 
 def load_beatmap(beatmap_path):
@@ -152,15 +153,6 @@ def generate_auto_play_cursor_data(beatmap):
             })
     return cursor_data
 
-def compute_angle(x1, y1, x2, y2):
-    """
-    Computes the absolute angle in degrees between two vectors (x1, y1) and (x2, y2).
-    """
-    dot = x1 * x2 + y1 * y2
-    det = x1 * y2 - y1 * x2
-    angle = math.atan2(det, dot) * 180 / math.pi
-    return abs(angle)
-
 def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_direction):
     """
     Generates cursor data for the Dancer playstyle with smooth curves between hit objects.
@@ -209,25 +201,14 @@ def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_directi
             time_diff = 1  # Avoid division by zero or negative values
 
         # Calculate number of points based on desired interval
-        desired_point_interval = 2  # Time in milliseconds between points
+        desired_point_interval = 5  # Time in milliseconds between points
         num_points = max(int(time_diff / desired_point_interval), 1)
 
-        # Calculate angle difference for curve direction alternation
-        if alternate_curve_direction and previous_obj and i < len(beatmap.hit_objects) - 1:
-            next_obj = beatmap.hit_objects[i + 1]
-            # Vector from previous to current
-            vec1_x = x - start_x
-            vec1_y = y - start_y
-            # Vector from current to next
-            vec2_x = next_obj['x'] - x
-            vec2_y = next_obj['y'] - y
-            angle_diff = compute_angle(vec1_x, vec1_y, vec2_x, vec2_y)
-            if angle_diff < 30:
-                curve_direction *= -1  # Alternate direction
-            # If angle_diff >= threshold, keep the current direction
-        elif alternate_curve_direction:
-            # If not enough objects to compare, keep current direction
-            curve_direction = 1
+        # Alternate curve direction if the option is enabled
+        if alternate_curve_direction:
+            curve_direction *= -1
+        else:
+            curve_direction = 1  # Always curve in the same direction
 
         for t in range(num_points):
             t_normalized = t / num_points
@@ -273,7 +254,7 @@ def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_directi
             })
 
         # Hold key during hit object and keep cursor moving
-        key_hold_duration = 20  # milliseconds for circles
+        key_hold_duration = 10  # milliseconds for circles
         key_release_time = time + key_hold_duration
 
         # Generate points during key hold duration
@@ -311,7 +292,7 @@ def generate_dancer_cursor_data(beatmap, dancing_degree, alternate_curve_directi
                     'keys': Key.K1.value  # Keep key pressed during slider
                 })
             # Release the key at the end of the slider
-            key_release_time = obj['time'] + slider_duration + 20  # Hold key slightly after slider ends
+            key_release_time = obj['time'] + slider_duration + 50  # Hold key slightly after slider ends
             cursor_data.append({
                 'time': key_release_time,
                 'x': position['x'],
@@ -404,40 +385,25 @@ def main():
     # Initialize the window
     window = initialize_window()
 
-    # Initialize resources
-    resources = load_resources(window)
+    # Initialize the audio player
+    pygame.init()
+    pygame.mixer.init()
 
-    # Start audio playback
-    start_time = start_audio_playback(resources['audio_file_path'])
+    hitsound = pygame.mixer.Sound('default_assets/hitsound.wav')
+    miss_sound = pygame.mixer.Sound('default_assets/miss_sound.wav')
 
-    # Initialize game state
-    game_state = initialize_game_state(resources, start_time)
+    # Create the renderer
+    width, height = glfw.get_window_size(window)
+    renderer = Renderer(width, height)
 
-    # Main render loop
-    while not glfw.window_should_close(window):
-        # Poll for and process events
-        glfw.poll_events()
-
-        # Process user input and adjust settings if necessary
-        process_events(window, game_state)
-
-        # Update game state
-        update_game_state(game_state)
-
-        # Render the current frame
-        render_frame(window, game_state)
-
-    # Cleanup and terminate
-    cleanup(window, game_state['renderer'])
-
-def load_resources(window):
-    resources = {}
-    # Load the beatmap
+    # Ask the user to select the beatmap
     beatmap_path = input("Enter the path to the beatmap (.osu) file: ")
+
+    # Load the beatmap
     beatmap = Beatmap(beatmap_path)
     beatmap_md5 = beatmap.get_md5_hash()
 
-    # Load the replay or generate an auto replay
+    # Ask the user to select the replay or playstyle
     replay_option = input("Enter the path to the replay (.osr) file or type 'auto' for autoplay: ")
 
     if replay_option.lower() == 'auto':
@@ -450,14 +416,19 @@ def load_resources(window):
         if playstyle_choice == '1':
             playstyle = 'Auto'
             dancing_degree = 0.0
-            apply_smoothing = False
+            apply_smoothing = False  # Do not apply smoothing in Auto mode
             alternate_curve_direction = False
         elif playstyle_choice == '2':
             playstyle = 'Dancer'
             dancing_degree = float(input("Enter dancing degree (0.0 to 1.0): "))
-            apply_smoothing = True
+            apply_smoothing = True  # Apply smoothing in Dancer mode
+
+            # Prompt for curve direction option
             curve_direction_choice = input("Should the curves alternate direction? (yes/no): ").lower()
-            alternate_curve_direction = curve_direction_choice in ['yes', 'y']
+            if curve_direction_choice in ['yes', 'y']:
+                alternate_curve_direction = True
+            else:
+                alternate_curve_direction = False
         else:
             print("Invalid playstyle choice.")
             glfw.terminate()
@@ -474,7 +445,7 @@ def load_resources(window):
             glfw.terminate()
             return
         mods = replay_data.replay.mods
-        apply_smoothing = True
+        apply_smoothing = True  # Apply smoothing for replays
 
         # Adjust beatmap for mods
         if mods & Mod.HardRock:
@@ -485,8 +456,8 @@ def load_resources(window):
     ar = beatmap.get_approach_rate()
     od = beatmap.get_overall_difficulty()
     preempt = calculate_preempt(ar)
+    fade_out_time = 300  # Time after hit object to fade out (in ms)
 
-    # Calculate hit windows
     hit_window_300, hit_window_100, hit_window_50 = calculate_hit_windows(od)
 
     # Get the audio file path
@@ -495,390 +466,278 @@ def load_resources(window):
         print("Audio file not specified in the beatmap.")
         glfw.terminate()
         return
+
     audio_file_path = os.path.join(os.path.dirname(beatmap_path), audio_filename)
 
-    # Initialize the renderer
-    window_width, window_height = glfw.get_framebuffer_size(glfw.get_current_context())
-    renderer = Renderer(window, window_width, window_height)
+    # Start playing the audio
+    start_time = start_audio_playback(audio_file_path)
 
-    resources['beatmap'] = beatmap
-    resources['replay_data'] = replay_data
-    resources['mods'] = mods
-    resources['apply_smoothing'] = apply_smoothing
-    resources['cs'] = float(cs)
-    resources['ar'] = float(ar)
-    resources['od'] = float(od)
-    resources['preempt'] = preempt
-    resources['hit_windows'] = (hit_window_300, hit_window_100, hit_window_50)
-    resources['audio_file_path'] = audio_file_path
-    resources['renderer'] = renderer
-    resources['option'] = replay_option
-
-    return resources
-
-def initialize_game_state(resources, start_time):
-    game_state = {}
-    game_state['start_time'] = start_time
-    game_state['adjusted_start_time'] = start_time
-    game_state['audio_offset'] = 0
-
-    # Initialize cursor data
-    replay_data = resources['replay_data']
-    mods = resources['mods']
-    apply_smoothing = resources['apply_smoothing']
-
+    # Get cursor positions from replay data
     if hasattr(replay_data, 'cursor_data'):
+        # Use generated cursor data
         cursor_data = replay_data.cursor_data
     else:
+        # Use cursor positions from replay file
         cursor_data = replay_data.get_cursor_positions(mods)
 
-    # Apply offset for replays
+    # APPLY OFFSET FOR REPLAYS
     OFFSET = 300
-    if resources.get('option') != "auto":
+    if replay_option.lower() != 'auto':
         for event in cursor_data:
             event['time'] -= OFFSET
 
-    game_state['cursor_data'] = cursor_data
-    game_state['cursor_trail'] = []
-    game_state['current_time'] = 0
-    game_state['previous_key'] = 0
-    game_state['hitted_objects'] = {}
-    game_state['active_sliders'] = {}
-    game_state['score'] = {
-        'score': 0,
-        'total_score': 0,
-        'total_hits': 0,
-        'combo': 0,
-        'accuracy': 0
-    }
-    game_state['hp'] = 1.0  # Start with full HP
-    game_state['renderer'] = resources['renderer']
-    game_state['beatmap'] = resources['beatmap']
-    game_state['apply_smoothing'] = apply_smoothing
-    game_state['hit_windows'] = resources['hit_windows']
-    game_state['preempt'] = resources['preempt']
-    game_state['cs'] = resources['cs']
-    game_state['mods'] = resources['mods']
-    game_state['cursor_pos'] = None
+    # Initialize cursor trail
+    cursor_trail = []
 
-    # Initialize audio player
-    pygame.init()
-    pygame.mixer.init()
-    pygame.font.init()
+    # Initialize audio offset
+    audio_offset = 0
 
-    game_state['hitsound'] = pygame.mixer.Sound('default_assets/hitsound.wav')
-    game_state['miss_sound'] = pygame.mixer.Sound('default_assets/miss_sound.wav')
-
-    # Setup key callback for offset adjustment
+    # Setup key callback for offset adjustment and key presses
     def key_callback(window, key, scancode, action, mods):
-        nonlocal game_state
+        nonlocal audio_offset
         if action == glfw.PRESS or action == glfw.REPEAT:
             if key == glfw.KEY_UP:
-                game_state['audio_offset'] += 10  # Increase offset by 10 ms
-                print(f"Audio Offset: {game_state['audio_offset']} ms")
+                audio_offset += 10  # Increase offset by 10 ms
+                print(f"Audio Offset: {audio_offset} ms")
             elif key == glfw.KEY_DOWN:
-                game_state['audio_offset'] -= 10  # Decrease offset by 10 ms
-                print(f"Audio Offset: {game_state['audio_offset']} ms")
+                audio_offset -= 10  # Decrease offset by 10 ms
+                print(f"Audio Offset: {audio_offset} ms")
 
-    glfw.set_key_callback(glfw.get_current_context(), key_callback)
+    glfw.set_key_callback(window, key_callback)
 
-    return game_state
+    # Keep track of hit objects
+    objects_to_hit = beatmap.hit_objects.copy()
+    current_object_index = 0
 
-def process_events(window, game_state):
-    # Currently handling audio offset adjustment in key_callback
-    pass  # Additional event processing can be added here if needed
+    # Keep track of score and combo
+    score = 0
+    combo = 0
 
-def update_game_state(game_state):
-    current_time = (glfw.get_time() * 1000) - (game_state['start_time'] - game_state['audio_offset'])
-    game_state['current_time'] = current_time
+    # Keep track of hits for rendering effects
+    hit_objects = []
+    missed_objects = []
 
-    # Get cursor position
-    cursor_pos = interpolate_cursor_position(game_state['cursor_data'], current_time, game_state['apply_smoothing'])
-    game_state['cursor_pos'] = cursor_pos
-
-    if cursor_pos:
-        # Update cursor trail
-        update_cursor_trail(game_state, cursor_pos)
-
-        # Handle input and hit detection
-        handle_input_and_hits(game_state)
-
-def update_cursor_trail(game_state, cursor_pos):
-    cursor_trail = game_state['cursor_trail']
-    cursor_trail.append({'x': cursor_pos['x'], 'y': cursor_pos['y']})
-
-    # Limit the length of the cursor trail if needed
-    if len(cursor_trail) > CURSOR_TRAIL_LENGTH:
-        cursor_trail = cursor_trail[-CURSOR_TRAIL_LENGTH:]
-
-    game_state['cursor_trail'] = cursor_trail
-
-def handle_input_and_hits(game_state):
-    current_time = game_state['current_time']
-    cursor_pos = game_state['cursor_pos']
-    previous_key = game_state['previous_key']
-    hitted_objects = game_state['hitted_objects']
-    active_sliders = game_state['active_sliders']
-    beatmap = game_state['beatmap']
-    hit_window_300, hit_window_100, hit_window_50 = game_state['hit_windows']
-    preempt = game_state['preempt']
-    cs = game_state['cs']
-    apply_smoothing = game_state['apply_smoothing']
-    hitsound = game_state['hitsound']
-    miss_sound = game_state['miss_sound']
-    score = game_state['score']
-
-    current_key = cursor_pos['keys']
-    new_key_pressed = current_key & (~previous_key)
-    key_pressed = (current_key & (Key.M1 | Key.M2 | Key.K1 | Key.K2)) != 0
-
-    # Get visible hit objects
-    visible_hit_objects = [
-        obj for obj in beatmap.hit_objects
-        if obj['time'] - preempt <= current_time <= obj['time'] + 300  # Adjust fade-out time as needed
-    ]
-
-    # Process active sliders
-    process_active_sliders(game_state)
-
-    # Process hit objects
-    for obj in visible_hit_objects:
-        obj_time = obj['time']
-
-        if obj_time in hitted_objects:
-            continue
-
-        # Skip objects whose hit windows have not yet started
-        if current_time < obj_time - hit_window_50:
-            continue
-
-        # Only process the first unhit object within its hit window
-        time_diff = current_time - obj_time
-
-        if obj['object_name'] == 'circle':
-            process_circle(game_state,obj, time_diff, cursor_pos,
-                           cs, new_key_pressed, key_pressed, hitsound,
-                           miss_sound, hitted_objects, score, current_time)
-            break  # Only process one object per frame
-        elif obj['object_name'] == 'slider':
-            process_slider_start(game_state, obj, time_diff, cursor_pos, cs, new_key_pressed, key_pressed)
-            break  # Only process one object per frame
-        elif obj['object_name'] == 'spinner':
-            # Implement spinner logic if needed
-            pass
-
-    # Update previous key
-    game_state['previous_key'] = current_key
-
-def process_circle(game_state, obj, time_diff, cursor_pos,
-                   cs, new_key_pressed, key_pressed, hitsound,
-                   miss_sound, hitted_objects, score, current_time):
-    if not new_key_pressed:
-        return
-
-    cursor_x = cursor_pos['x']
-    cursor_y = cursor_pos['y']
-    obj_x = obj['x']
-    obj_y = obj['y']
-    distance = math.hypot(cursor_x - obj_x, cursor_y - obj_y)
-    radius = calculate_circle_radius(cs)
-
-    hit_window_300, hit_window_100, hit_window_50 = game_state['hit_windows']
-
-    if distance > radius:
-        return  # Cursor not on the circle
-
-    if -hit_window_300 <= time_diff <= hit_window_300:
-        success_hit(300, score)
-    elif -hit_window_100 <= time_diff <= hit_window_100:
-        success_hit(100, score)
-    elif -hit_window_50 <= time_diff <= hit_window_50:
-        success_hit(50, score)
-    else:
-        miss(score)
-        #miss_sound.play()
-
-    hitsound.play()
-    game_state["renderer"].on_object_hit(obj, 300, current_time)
-    hitted_objects[obj['time']] = True
-
-def process_slider_start(game_state, obj, time_diff, cursor_pos, cs, new_key_pressed, key_pressed):
-    hitted_objects = game_state['hitted_objects']
-    active_sliders = game_state['active_sliders']
-    hitsound = game_state['hitsound']
-    miss_sound = game_state['miss_sound']
-    score = game_state['score']
-
-    hit_window_50 = game_state['hit_windows'][2]
-
-    if obj['time'] in hitted_objects:
-        return
-
-    if not new_key_pressed:
-        return
-
-    cursor_x = cursor_pos['x']
-    cursor_y = cursor_pos['y']
-    obj_x = obj['x']
-    obj_y = obj['y']
-    distance = math.hypot(cursor_x - obj_x, cursor_y - obj_y)
-    radius = calculate_circle_radius(cs)
-
-    if distance > radius:
-        miss(score)
-        hitsound.play()
-        #miss_sound.play()
-        hitted_objects[obj['time']] = True
-        return
-
-    if -hit_window_50 <= time_diff <= hit_window_50:
-        # Start the slider
-        if 'ticks' not in obj:
-            obj['ticks'] = compute_slider_ticks(obj, game_state['beatmap'])
-        active_sliders[obj['time']] = {
-            'object': obj,
-            'start_time': obj['time'],
-            'end_time': obj['time'] + obj['slider_duration'],
-            'ticks': obj['ticks'],
-            'missed_ticks': 0,
-            'total_ticks': len(obj['ticks']),
-            'slider_path': obj['curve_points']
-        }
-        hitsound.play()
-        hitted_objects[obj['time']] = True
-    else:
-        miss(score)
-        hitsound.play()
-        #miss_sound.play()
-        hitted_objects[obj['time']] = True
-
-def process_active_sliders(game_state):
-    current_time = game_state['current_time']
-    cursor_pos = game_state['cursor_pos']
-    active_sliders = game_state['active_sliders']
-    hitsound = game_state['hitsound']
-    miss_sound = game_state['miss_sound']
-    score = game_state['score']
-    key_pressed = (cursor_pos['keys'] & (Key.M1 | Key.M2 | Key.K1 | Key.K2)) != 0
-    cs = game_state['cs']
-    radius = calculate_circle_radius(cs)
-
-    for slider_time in list(active_sliders.keys()):
-        slider_info = active_sliders[slider_time]
-        obj = slider_info['object']
-        start_time = slider_info['start_time']
-        end_time = slider_info['end_time']
-
-        if current_time >= end_time:
-            # Slider has ended
-            total_ticks = slider_info['total_ticks']
-            missed_ticks = slider_info['missed_ticks']
-
-            hitsound.play()
-
-            if missed_ticks == 0:
-                success_hit(300, score)
-            elif missed_ticks < total_ticks:
-                success_hit(100, score)
-            else:
-                miss(score)
-                miss_sound.play()
-            del active_sliders[slider_time]
-            continue
-
-        # Slider is still active
-        cursor_x = cursor_pos['x']
-        cursor_y = cursor_pos['y']
-
-        # Process slider ticks
-        for tick in slider_info['ticks']:
-            if tick.get('processed', False):
-                continue
-            tick_time = tick['time']
-            if current_time >= tick_time:
-                tick_pos = tick['position']
-                distance = math.hypot(cursor_x - tick_pos[0], cursor_y - tick_pos[1])
-                if distance <= radius and key_pressed:
-                    tick['hit'] = True
-                else:
-                    tick['hit'] = False
-                    slider_info['missed_ticks'] += 1
-                tick['processed'] = True
-
-def render_frame(window, game_state):
-    glClear(GL_COLOR_BUFFER_BIT)
-    renderer = game_state['renderer']
-    current_time = game_state['current_time']
-    cursor_pos = game_state['cursor_pos']
-    cursor_trail = game_state['cursor_trail']
-    beatmap = game_state['beatmap']
-    preempt = game_state['preempt']
-    cs = game_state['cs']
-
-    current_key = cursor_pos['keys']
-    new_key_pressed = current_key & (~game_state['previous_key'])
-
-    if new_key_pressed:
-        game_state['last_press_time'] = current_time
-
-    # Draw background
-    renderer.draw_background(current_time, game_state.get('last_press_time', -100000))
-
-    # Draw hit objects
-    visible_hit_objects = [
-        obj for obj in beatmap.hit_objects
-        if obj['time'] - preempt <= current_time <= (obj['time'] + (obj.get('slider_duration') if 'slider_duration' in obj else 0) ) + 100  # Adjust fade-out time as needed
-    ]
-
-    for obj in visible_hit_objects:
-        obj_time = obj['time']
-        appear_time = obj_time - preempt
-        time_since_appear = current_time - appear_time
-        approach_scale = 1.0 - (time_since_appear / preempt)
-
-        if obj['object_name'] == 'circle':
-            renderer.draw_circle_object(obj, cs, approach_scale, current_time)
-        elif obj['object_name'] == 'slider':
-            renderer.draw_slider_object(obj, cs, approach_scale, game_state['active_sliders'], current_time)
-        elif obj['object_name'] == 'spinner':
-            renderer.draw_spinner_object(obj, current_time)
+    # Initialize a list to store key states
+    previous_keys = 0  # No keys pressed initially
     
-    '''for effect_data in renderer.hit_objects_effects[:]:  # Copy the list to avoid modification issues
-        hit_object = effect_data['object']
-        effect_start_time = effect_data['effect_start_time']
-        duration = effect_data['duration']
-        elapsed_time = current_time - effect_start_time
+    active_sliders = []
 
-        if elapsed_time <= duration:
-            # Render the hit effect
-            if 'effects' in renderer.render_functions and hasattr(renderer.render_functions['effects'], 'render_hit_effect'):
-                renderer.render_functions['effects'].render_hit_effect(renderer, hit_object, elapsed_time, duration)
+    # Main render loop
+    while not glfw.window_should_close(window):
+        # Poll for and process events
+        glfw.poll_events()
+
+        # Update start_time if offset changed
+        adjusted_start_time = start_time - audio_offset
+
+        # Calculate the current time in the beatmap
+        current_time = glfw.get_time() * 1000 - adjusted_start_time  # In milliseconds
+
+        # Clear the screen
+        glClear(GL_COLOR_BUFFER_BIT)
+
+        # Draw background
+        renderer.draw_background()
+
+        # Draw hit objects based on timing
+        visible_hit_objects = [
+            obj for obj in beatmap.hit_objects
+            if obj['time'] - preempt <= current_time <= obj['time'] + fade_out_time
+        ]
+
+        for obj in visible_hit_objects:
+            obj_time = obj['time']
+            appear_time = obj_time - preempt
+            time_since_appear = current_time - appear_time
+            approach_scale = 1.0 - (time_since_appear / preempt)
+
+            if obj['object_name'] == 'circle':
+                renderer.draw_circle_object(obj, cs, approach_scale)
+            elif obj['object_name'] == 'slider':
+                renderer.draw_slider_object(obj, cs, approach_scale)
+            elif obj['object_name'] == 'spinner':
+                renderer.draw_spinner_object(obj, current_time)
+
+        # Get the interpolated cursor position
+        cursor_pos = interpolate_cursor_position(cursor_data, current_time, apply_smoothing)
+
+        if cursor_pos:
+            # Update the cursor trail
+            cursor_trail.append({'x': cursor_pos['x'], 'y': cursor_pos['y']})
+
+            # Draw the cursor trail
+            renderer.draw_cursor_trail(cursor_trail)
+
+            # Determine cursor color based on keys pressed
+            current_keys = cursor_pos['keys']
+            if current_keys:
+                cursor_color = CURSOR_COLOR_ACTIVE
             else:
-                renderer.default_render_hit_effect(hit_object, elapsed_time, duration)
+                cursor_color = CURSOR_COLOR_INACTIVE
+
+            # Draw the cursor
+            renderer.draw_cursor(cursor_pos, cursor_color, current_time)
+
+            # Key press detection
+            new_keys_pressed = current_keys & (~previous_keys)
+            if new_keys_pressed:
+                print("PRESS", new_keys_pressed)
+                # One or more keys were just pressed
+                # Proceed with hit detection
+
+                # Check if there is an object to hit
+                if current_object_index < len(objects_to_hit):
+                    print("Current object index:", current_object_index)
+                    hit_object = objects_to_hit[current_object_index]
+                    obj_time = hit_object['time']
+
+                    time_diff = abs(current_time - obj_time)
+
+                    if hit_object['object_name'] == 'circle':
+                        # Circle object hit
+                        if time_diff <= hit_window_50:
+                            # Check if cursor is over the object
+                            cursor_x = cursor_pos['x']
+                            cursor_y = cursor_pos['y']
+                            obj_x = hit_object['x']
+                            obj_y = hit_object['y']
+                            distance = ((cursor_x - obj_x) ** 2 + (cursor_y - obj_y) ** 2) ** 0.5
+                            radius = calculate_circle_radius(cs)
+
+                            if distance <= radius:
+                                # Determine score based on time_diff
+                                if time_diff <= hit_window_300:
+                                    hit_score = 300
+                                elif time_diff <= hit_window_100:
+                                    hit_score = 100
+                                else:
+                                    hit_score = 50
+
+                                # Update score and combo
+                                score += hit_score
+                                combo += 1
+
+                                # Play hitsound
+                                hitsound.play()
+
+                                # Notify renderer about the hit
+                                renderer.on_object_hit(hit_object, hit_score)
+
+                                # Move to next object
+                                current_object_index += 1
+                            else:
+                                # Cursor not over the object, miss
+                                miss_sound.play()
+                                renderer.on_player_miss(hit_object)
+                                combo = 0
+                                current_object_index += 1
+                        else:
+                            # Time difference too large, possible miss
+                            if current_time - obj_time > hit_window_50:
+                                # Missed the object
+                                miss_sound.play()
+                                renderer.on_player_miss(hit_object)
+                                combo = 0
+                                current_object_index += 1
+
+                    elif hit_object['object_name'] == 'slider':
+                        # Slider hit detection
+                        if abs(time_diff) <= hit_window_50:
+                            # Check if cursor is over the slider start position
+                            cursor_x = cursor_pos['x']
+                            cursor_y = cursor_pos['y']
+                            obj_x = hit_object['x']
+                            obj_y = hit_object['y']
+                            distance = ((cursor_x - obj_x) ** 2 + (cursor_y - obj_y) ** 2) ** 0.5
+                            radius = calculate_circle_radius(cs)
+
+                            if distance <= radius:
+                                # Start tracking the slider
+                                slider_end_time = obj_time + hit_object['slider_duration']
+                                active_sliders.append({
+                                    'object': hit_object,
+                                    'start_time': obj_time,
+                                    'end_time': slider_end_time,
+                                    'missed': False
+                                })
+
+                                # Play initial hit sound
+                                hitsound.play()
+
+                                # Do not increment current_object_index yet
+                            else:
+                                # Cursor not over the slider start, miss
+                                miss_sound.play()
+                                renderer.on_player_miss(hit_object)
+                                combo = 0
+                                current_object_index += 1
+                        else:
+                            # Missed slider start
+                            if current_time - obj_time > hit_window_50:
+                                miss_sound.play()
+                                renderer.on_player_miss(hit_object)
+                                combo = 0
+                                current_object_index += 1
+                else:
+                    # No more objects to hit, but key was pressed
+                    pass  # Optionally handle extra key presses
+
+            previous_keys = current_keys
         else:
-            # Effect duration over, remove from the list
-            renderer.hit_objects_effects.remove(effect_data)'''
+            # Cursor is not active during this time
+            pass
+            
+        for slider in active_sliders[:]:  # Copy the list to avoid modification issues
+            hit_object = slider['object']
+            slider_start_time = slider['start_time']
+            slider_end_time = slider['end_time']
 
-    if cursor_pos:
-        # Draw the cursor trail
-        renderer.draw_cursor_trail(cursor_trail, current_time)
+            if slider_start_time <= current_time <= slider_end_time:
+                # Slider is active
+                progress = (current_time - slider_start_time) / (slider_end_time - slider_start_time)
+                slider_position = get_slider_position_at(hit_object, progress)
 
-        # Draw the cursor
-        renderer.draw_cursor(cursor_pos, (255, 255, 255), current_time)
+                cursor_x = cursor_pos['x']
+                cursor_y = cursor_pos['y']
+                slider_x = slider_position['x']
+                slider_y = slider_position['y']
+                distance = ((cursor_x - slider_x) ** 2 + (cursor_y - slider_y) ** 2) ** 0.5
+                radius = calculate_circle_radius(cs)
 
-    # Render UI elements
-    #renderer.draw_ui(0, 0, 100, game_state['hp'], cursor_pos['keys'] if cursor_pos else 0, current_time)
+                if distance > radius * 2:  # Allow some margin
+                    # Player is too far from the slider path
+                    if not slider['missed']:
+                        miss_sound.play()
+                        renderer.on_player_miss(hit_object)
+                        slider['missed'] = True
+                        combo = 0
+            elif current_time > slider_end_time:
+                # Slider has ended
+                if not slider['missed']:
+                    # Player successfully completed the slider
+                    hit_score = 300  # Simplified scoring
+                    score += hit_score
+                    combo += 1
+                    renderer.on_object_hit(hit_object, hit_score)
+                    # Play hit sound at slider end
+                    hitsound.play()
+                else:
+                    # Slider was missed or sliderbroken
+                    # Play miss sound at slider end
+                    miss_sound.play()
+                active_sliders.remove(slider)
+                current_object_index += 1
 
-    #renderer.render_effects(current_time)
+        # Render effects
+        if 'effects' in renderer.render_functions:
+            renderer.render_functions['effects'].render_effects(renderer)
 
-    # Swap front and back buffers
-    glfw.swap_buffers(window)
+        # Swap front and back buffers
+        glfw.swap_buffers(window)
 
-def cleanup(window, renderer):
     renderer.cleanup()
-    glfw.destroy_window(window)
+    # Terminate glfw when done
     glfw.terminate()
-    pygame.quit()
 
 def interpolate_cursor_position(cursor_data, current_time, apply_smoothing=False):
     """
@@ -947,76 +806,6 @@ def determine_arc_direction(x1, y1, x2, y2, x3, y3):
         return 'clockwise'
     else:
         return 'counterclockwise'
-
-def compute_slider_ticks(obj, beatmap):
-    ticks = []
-    start_time = obj['time']
-    duration = obj['slider_duration']
-    repeats = obj['slides']
-
-    # Get timing point information
-    beat_length, slider_velocity = beatmap.get_timing_at(start_time)
-    slider_multiplier = float(beatmap.difficulty['SliderMultiplier'])
-    tick_rate = float(beatmap.difficulty['SliderTickRate'])
-
-    # Calculate tick distance
-    tick_distance = (beat_length / tick_rate) * slider_multiplier * slider_velocity
-
-    # Calculate the number of ticks per repeat
-    ticks_per_repeat = int(obj['length'] / tick_distance)
-
-    # Get the slider path length
-    slider_length = obj['length']
-
-    # Compute ticks for each repeat
-    for repeat_index in range(repeats):
-        reverse = repeat_index % 2 == 1  # Reverse direction on odd repeats
-        for tick_index in range(1, ticks_per_repeat + 1):
-            tick_position = tick_index * tick_distance
-            if tick_position >= slider_length:
-                break
-            # Calculate the time for this tick
-            tick_progress = tick_position / slider_length
-            if reverse:
-                tick_progress = 1.0 - tick_progress
-            tick_time = start_time + (duration / repeats) * (repeat_index + tick_progress)
-            # Get the position on the slider path
-            position = get_slider_position_at(obj, tick_progress)
-            ticks.append({
-                'time': tick_time,
-                'position': (position['x'], position['y']),  # Should be a tuple (x, y)
-                'processed': False,
-                'hit': False,
-            })
-    return ticks
-
-
-def draw_hit_objects(beatmap, renderer, cs, preempt, fade_out, current_time):
-    # Determine which objects are visible
-    visible_objects = [obj for obj in beatmap.hit_objects
-                       if obj['time'] - preempt <= current_time <= obj['time'] + fade_out]
-
-    for obj in visible_objects:
-        appear_time = obj['time'] - preempt
-        time_since_appear = current_time - appear_time    
-        approach_scale = 1.0 - (time_since_appear / preempt)
-
-        if obj['object_name'] == 'circle':
-            renderer.draw_circle_object(obj, cs, approach_scale)
-        elif obj['object_name'] == 'slider':
-            renderer.draw_slider_object(obj, cs, approach_scale)
-        elif obj['object_name'] == 'spinner':
-            renderer.draw_spinner_object(obj, cs, approach_scale)
-    
-    return visible_objects
-
-def success_hit(hitscore, score_obj):
-    score_obj['total_hits'] += 1
-    score_obj['combo'] += 1
-
-def miss(score_obj):
-    score_obj['total_hits'] += 1
-    score_obj['combo'] = 0
 
 if __name__ == "__main__":
     main()

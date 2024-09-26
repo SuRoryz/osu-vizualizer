@@ -1,24 +1,28 @@
+# skins/default/effects.py
+
 import os
 from OpenGL.GL import *
 import numpy as np
+import time
+from src.utils import osu_to_ndc, calculate_circle_radius
+from src.constants import OSU_PLAYFIELD_WIDTH
+from skins.default.skin_settings import SKIN_SETTINGS
 from skins.default.circle_render import draw_circle
-from src.utils import osu_to_ndc
-from config import CURSOR_SIZE
-from src.constants import OSU_PLAYFIELD_WIDTH, OSU_PLAYFIELD_HEIGHT
 
 # Module-level variables
+hit_effects = []
 shader_program = None
 uniform_locations = {}
 
 def init(renderer):
     """
-    Initializes the cursor rendering module, loads shaders, and compiles them.
+    Initializes the effects module, loads shaders, and compiles them.
     """
     global shader_program, uniform_locations
 
     # Load shader sources
-    vertex_shader_path = os.path.join(renderer.skin_path, 'shaders', 'cursor', 'vertex.glsl')
-    fragment_shader_path = os.path.join(renderer.skin_path, 'shaders', 'cursor', 'fragment.glsl')
+    vertex_shader_path = os.path.join(renderer.skin_path, 'shaders', 'effects', 'vertex.glsl')
+    fragment_shader_path = os.path.join(renderer.skin_path, 'shaders', 'effects', 'fragment.glsl')
 
     with open(vertex_shader_path, 'r') as f:
         vertex_shader_source = f.read()
@@ -31,65 +35,84 @@ def init(renderer):
     # Get uniform locations
     uniform_locations['u_mvp_matrix'] = glGetUniformLocation(shader_program, 'u_mvp_matrix')
     uniform_locations['u_time'] = glGetUniformLocation(shader_program, 'u_time')
-    uniform_locations['u_cursor_size'] = glGetUniformLocation(shader_program, 'u_cursor_size')
 
 def create_shader_program(vertex_source, fragment_source):
-    # Compile vertex shader
+    """
+    Compiles vertex and fragment shaders and links them into a program.
+    """
     vertex_shader = glCreateShader(GL_VERTEX_SHADER)
     glShaderSource(vertex_shader, vertex_source)
     glCompileShader(vertex_shader)
     if not glGetShaderiv(vertex_shader, GL_COMPILE_STATUS):
         error = glGetShaderInfoLog(vertex_shader).decode()
-        print(f"Vertex Shader compilation error:\n{error}")
+        print(f"Circle Vertex Shader compilation error: {error}")
         glDeleteShader(vertex_shader)
         return None
-    
-    print(fragment_source)
 
-    # Compile fragment shader
     fragment_shader = glCreateShader(GL_FRAGMENT_SHADER)
     glShaderSource(fragment_shader, fragment_source)
     glCompileShader(fragment_shader)
     if not glGetShaderiv(fragment_shader, GL_COMPILE_STATUS):
         error = glGetShaderInfoLog(fragment_shader).decode()
-        print(f"Fragment Shader compilation error:\n{error}")
-        glDeleteShader(fragment_shader)
-        glDeleteShader(vertex_shader)
-        return None
-
-    # Link shaders into a program
-    shader_program = glCreateProgram()
-    glAttachShader(shader_program, vertex_shader)
-    glAttachShader(shader_program, fragment_shader)
-    glLinkProgram(shader_program)
-    if not glGetProgramiv(shader_program, GL_LINK_STATUS):
-        error = glGetProgramInfoLog(shader_program).decode()
-        print(f"Shader Program linking error:\n{error}")
-        glDeleteProgram(shader_program)
-        glDeleteShader(vertex_shader)
+        print(f"Circle Fragment Shader compilation error: {error}")
         glDeleteShader(fragment_shader)
         return None
 
-    # Clean up shaders
-    #glDeleteShader(vertex_shader)
-    #glDeleteShader(fragment_shader)
+    program = glCreateProgram()
+    glAttachShader(program, vertex_shader)
+    glAttachShader(program, fragment_shader)
+    glLinkProgram(program)
+    if not glGetProgramiv(program, GL_LINK_STATUS):
+        error = glGetProgramInfoLog(program).decode()
+        print(f"Circle Shader Program linking error: {error}")
+        glDeleteProgram(program)
+        return None
 
-    return shader_program
+    glDeleteShader(vertex_shader)
+    glDeleteShader(fragment_shader)
 
-def draw_cursor(cursor_pos, cursor_color, renderer, current_time):
+    return program
+
+def on_object_hit(hit_object, current_time):
     """
-    Draws the cursor with a rainbow gradient and white glow.
+    Adds a hit effect for the hit object.
     """
-    osu_x = cursor_pos['x']
-    osu_y = cursor_pos['y']
-    radius = CURSOR_SIZE
+    hit_effects.append({
+        'object': hit_object,
+        'start_time': current_time,
+        'duration': 0.5  # Duration in seconds
+    })
+
+def render_effects(renderer, current_time):
+    """
+    Renders all active effects.
+    """
+    global hit_effects
+    active_effects = []
+    for effect in hit_effects:
+        elapsed = current_time - effect['start_time']
+        if elapsed < effect['duration']:
+            progress = elapsed / effect['duration']
+            render_hit_effect(effect['object'], progress, renderer, current_time)
+            active_effects.append(effect)
+    hit_effects = active_effects
+
+def render_hit_effect(hit_object, progress, renderer, current_time):
+    """
+    Renders a cool hit effect at the hit object's position.
+    """
+    x = hit_object['x']
+    y = hit_object['y']
+    radius = calculate_circle_radius(renderer.cs)
+    opacity = 1.0 - progress
 
     num_segments = 64
-    theta = np.linspace(0, 2 * np.pi, num_segments, endpoint=False)
+    theta = np.linspace(0, 2 * np.pi, num_segments)
     vertices = np.zeros((num_segments, 2), dtype=np.float32)
-    x_ndc, y_ndc = osu_to_ndc(osu_x, osu_y)
-    vertices[:, 0] = x_ndc + radius * np.cos(theta)
-    vertices[:, 1] = y_ndc + radius * np.sin(theta)
+    x_ndc, y_ndc = osu_to_ndc(x, y)
+    scale = 1.0 + progress * 2.0
+    vertices[:, 0] = x_ndc + radius * scale * np.cos(theta)
+    vertices[:, 1] = y_ndc + radius * scale * np.sin(theta)
 
     # Create VAO and VBO
     vao = glGenVertexArrays(1)
@@ -110,9 +133,8 @@ def draw_cursor(cursor_pos, cursor_color, renderer, current_time):
     # Set uniforms
     glUniformMatrix4fv(uniform_locations['u_mvp_matrix'], 1, GL_FALSE, renderer.projection_matrix.T)
     glUniform1f(uniform_locations['u_time'], current_time)
-    glUniform1f(uniform_locations['u_cursor_size'], radius)
 
-    # Draw the cursor
+    # Draw the effect
     glDrawArrays(GL_TRIANGLE_FAN, 0, num_segments)
 
     # Clean up
